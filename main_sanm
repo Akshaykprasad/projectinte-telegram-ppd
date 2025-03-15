@@ -1,0 +1,89 @@
+import numpy as np
+import cv2
+import easyocr
+import requests
+
+# Flask Server URL (Modify if needed)
+FLASK_SERVER_URL = "http://localhost:5000/receive_text"
+
+# Initialize EasyOCR reader
+reader = easyocr.Reader(['en'])
+
+# Create a blank canvas
+canvas_width, canvas_height = 800, 400
+canvas = np.ones((canvas_height, canvas_width), dtype=np.uint8) * 255
+recognized_texts = []
+
+# Variables for mouse drawing
+drawing = False
+prev_x, prev_y = None, None
+
+def draw_with_mouse(event, x, y, flags, param):
+    """Handles mouse input for drawing on canvas."""
+    global drawing, prev_x, prev_y, canvas
+
+    print(f"Mouse Event: {event}, X: {x}, Y: {y}")  # Debugging mouse events
+
+    if event == cv2.EVENT_LBUTTONDOWN:
+        drawing = True
+        prev_x, prev_y = x, y
+    elif event == cv2.EVENT_MOUSEMOVE and drawing:
+        if prev_x is not None and prev_y is not None:
+            cv2.line(canvas, (prev_x, prev_y), (x, y), (0, 0, 0), thickness=5)
+        prev_x, prev_y = x, y
+    elif event == cv2.EVENT_LBUTTONUP:
+        drawing = False
+        prev_x, prev_y = None, None
+
+def recognize_handwriting():
+    """Processes handwriting and sends it to the Flask website."""
+    global recognized_texts
+
+    # Convert to grayscale and invert colors
+    gray = cv2.bitwise_not(canvas)
+    cv2.imwrite("temp.png", gray)  # Save the image for OCR
+
+    # Use EasyOCR to recognize handwriting
+    result = reader.readtext("temp.png")
+
+    if result:
+        words = " ".join([res[1] for res in result])
+        recognized_texts.append(words)
+
+        # Send recognized text to Flask server
+        try:
+            response = requests.post(
+                FLASK_SERVER_URL, json={"text": words}, timeout=5
+            )
+            if response.status_code == 200:
+                print("✅ Sent to website:", words)
+            else:
+                print(f"❌ Website error {response.status_code}: {response.text}")
+        except requests.exceptions.RequestException as e:
+            print("❌ Error sending to website:", e)
+
+# OpenCV window setup
+cv2.namedWindow("Handwriting Pad")
+cv2.setMouseCallback("Handwriting Pad", draw_with_mouse)
+
+while True:
+    # Show drawing canvas
+    cv2.imshow("Handwriting Pad", canvas)
+
+    # Display recognized text in a separate window
+    text_display = np.ones((100, canvas_width), dtype=np.uint8) * 255
+    cv2.putText(text_display, f"Recognized: {' '.join(recognized_texts)}", (10, 50),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2, cv2.LINE_AA)
+    cv2.imshow("Recognized Text", text_display)
+
+    key = cv2.waitKey(1) & 0xFF
+
+    if key == ord('s'):  # Press 's' to process handwriting
+        recognize_handwriting()
+    elif key == ord('c'):  # Press 'c' to clear canvas
+        canvas[:] = 255
+        recognized_texts.clear()
+    elif key == ord('q'):  # Press 'q' to quit
+        break
+
+cv2.destroyAllWindows()
